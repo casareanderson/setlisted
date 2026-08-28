@@ -324,7 +324,7 @@ def cmd_make_playlist(a):
     # NB: /users/{id}/playlists 403s for this app; /me/playlists is the one
     # that works. Don't "fix" this back to the documented user-scoped path.
     if not a.no_flow:
-        picked = _sequence(picked)
+        picked = _sequence(picked, order=genres)
 
     pl = _call("POST", "/me/playlists",
                json={"name": a.name, "public": False,
@@ -462,35 +462,48 @@ def _previous_mix_uris(prefix: str = "Hermes DJ", cap: int = 25) -> set:
 # artist. So flow is built structurally: play genres in BLOCKS along an arc
 # instead of alternating every track (round-robin picks well but sequences
 # terribly -- Biggie into Luther Vandross into Burna Boy).
+# A DEFAULT arc, not a required one. _sequence() is genre-agnostic: it orders
+# blocks by whatever order the caller supplies, so the arc is just "the order
+# you listed your genres in". This list is only the fallback for weekly-mix.
 FLOW_ARC = [
-    "classic soul",   # warm up
-    "neo soul",
-    "rnb",
-    "jazz rap",       # bridge: soul samples into drums
-    "90s hip hop",    # peak
-    "boom bap",
-    "g funk",
-    "uk rap",         # sustain, modern
-    "afrobeats",      # finish high
+    "classic soul", "neo soul", "rnb", "jazz rap",
+    "90s hip hop", "boom bap", "g funk", "uk rap", "afrobeats",
 ]
 
 
-def _arc_rank(genre: str) -> int:
+def _arc_rank(genre: str, order: list) -> int:
+    """Position of a genre in the supplied arc; unknown genres sort to the end."""
     g = (genre or "").lower()
-    for i, name in enumerate(FLOW_ARC):
-        if name in g or g in name:
+    for i, name in enumerate(order):
+        n = name.lower()
+        if n == g or n in g or g in n:
             return i
-    return len(FLOW_ARC)
+    return len(order)
 
 
-def _sequence(tracks: list) -> list:
-    """Group into genre blocks along FLOW_ARC; chronological inside a block."""
+def _sequence(tracks: list, order: list | None = None) -> list:
+    """Sequence tracks into blocks along an arc.
+
+    Deliberately knows nothing about music genres. Each track carries a `_genre`
+    tag (any string -- genre, mood, decade, energy label, whatever the caller
+    used to find it). Blocks are emitted in `order`, so the caller controls the
+    arc simply by the order it lists its tags in. Falls back to FLOW_ARC.
+
+    Three rules, all derivable from metadata alone -- there is no tempo, energy
+    or key data on the public API since Nov 2024:
+      1. group into blocks, don't alternate  (alternating every track is a
+         genre shuffle, not a set)
+      2. chronological within a block         (reads as a run through an era)
+      3. no same-artist back to back          (within the block, so the swap
+         cannot fragment the arc)
+    """
+    order = order or FLOW_ARC
     blocks: dict = {}
     for t in tracks:
         blocks.setdefault(t.get("_genre", ""), []).append(t)
 
     out = []
-    for g in sorted(blocks, key=_arc_rank):
+    for g in sorted(blocks, key=lambda x: _arc_rank(x, order)):
         blk = blocks[g]
         # Chronological within a block reads as a deliberate run through the era
         # rather than a shuffle.
@@ -622,7 +635,7 @@ def cmd_weekly_mix(a):
         raise DJError("no new tracks found — try different --genres")
 
     if not a.no_flow:
-        picked = _sequence(picked)
+        picked = _sequence(picked, order=genres)
 
     pl = _call("POST", "/me/playlists",
                json={"name": a.name, "public": False,
@@ -696,11 +709,7 @@ def cmd_party_set(a):
         total += got_ms
         print(f"  {g:<20} {len(keep):>3} tracks  {got_ms//60000:>3} min")
 
-    picked = []
-    for g in genres:                      # explicit arc order, not _arc_rank
-        blk = blocks.get(g, [])
-        blk.sort(key=lambda t: (t.get("album", {}) or {}).get("release_date", "") or "")
-        picked.extend(_dedupe_artists(blk))
+    picked = _sequence([t for g in genres for t in blocks.get(g, [])], order=genres)
     if not picked:
         raise DJError("no tracks found — try different --genres")
 
@@ -783,10 +792,10 @@ def cmd_new_artists(a):
     if not picked:
         raise DJError(f"nothing found released since {a.since} by unknown artists")
 
-    picked = _sequence(picked)
+    picked = _sequence(picked, order=genres)
     pl = _call("POST", "/me/playlists",
                json={"name": a.name, "public": False,
-                     "description": f"Hermes DJ — artists new to you, released {a.since}+"})
+                     "description": f"Artists new to you, released {a.since}+"})
     _call("POST", f"/playlists/{pl['id']}/items",
           json={"uris": [t["uri"] for t in picked]})
     print(f"\ncreated {a.name!r} with {len(picked)} tracks by artists new to you")
@@ -859,7 +868,7 @@ def main() -> int:
     a = p.parse_args()
     try:
         a.fn(a)
-    except DJError as exc:
+    except (DJError, hermes_secrets.SecretError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

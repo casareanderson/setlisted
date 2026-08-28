@@ -125,19 +125,30 @@ this tier — so era and style have to come from the search phrasing alone. `wee
 
 ## Sequencing: making it flow
 
-Ordering a set properly wants tempo and energy from `/audio-features` — which is 403, with
-`popularity` null too. What's left is the genre that found each track, its release date,
-duration and artist. So flow is structural:
+Ordering a set properly wants tempo, energy and key — all removed from the public API in
+Nov 2024, with `popularity` stripped in Feb 2026 on top. What's left is a tag, a release
+date, a duration and an artist. `_sequence()` gets flow out of exactly that, and it is
+**genre-agnostic** — it knows nothing about music:
 
-- **Genre blocks, not alternation.** Round-robin picks well but sequences terribly —
-  Biggie into Luther Vandross into Burna Boy. Blocks are ordered along an arc:
-  `classic soul → neo soul → rnb → jazz rap → 90s hip hop → boom bap → g funk → uk rap → afrobeats`
-  (warm up → bridge → peak → finish).
-- **Chronological within a block**, so it reads as a run through an era.
-- **No same-artist back to back** — de-duplicated *inside* each block, because doing it
-  globally swaps tracks across boundaries and fragments the arc.
+```python
+_sequence(tracks, order=["opener", "build", "peak", "closer"])
+```
 
-Set your own arc with `FLOW_ARC`, or `--no-flow` to keep discovery order.
+Every track carries a `_genre` tag, but that's just a label — a genre, a mood, a decade, an
+energy band, whatever you searched on. Blocks are emitted in the `order` you pass, so **the
+arc is simply the order you list your tags in.** Reverse the list, reverse the set.
+
+Three rules, all derivable from metadata alone:
+
+1. **Group into blocks, never alternate.** Round-robin picks a balanced set but sequences
+   terribly — one track per genre in rotation is a shuffle, not a set.
+2. **Chronological within a block**, so it reads as a deliberate run through an era.
+3. **No same-artist back to back** — de-duplicated *inside* the block, because doing it
+   globally swaps tracks across boundaries and fragments the arc it exists to protect.
+
+This is weaker than real BPM/energy sequencing and isn't pretending otherwise. It's what
+works when that data is gone. If you run the Spotify desktop client,
+[sort-play](https://github.com/hoeci/sort-play) does it properly with real audio features.
 
 ## The `--audience` split
 
