@@ -323,9 +323,6 @@ def cmd_make_playlist(a):
         raise DJError(f"no tracks found for seed {a.seed!r}")
     # NB: /users/{id}/playlists 403s for this app; /me/playlists is the one
     # that works. Don't "fix" this back to the documented user-scoped path.
-    if not a.no_flow:
-        picked = _sequence(picked, order=genres)
-
     pl = _call("POST", "/me/playlists",
                json={"name": a.name, "public": False,
                      "description": f"Hermes DJ — seed: {a.seed}"})
@@ -496,6 +493,8 @@ def _sequence(tracks: list, order: list | None = None) -> list:
       2. chronological within a block         (reads as a run through an era)
       3. no same-artist back to back          (within the block, so the swap
          cannot fragment the arc)
+
+    Where 2 and 3 conflict, 3 wins -- see _dedupe_artists.
     """
     order = order or FLOW_ARC
     blocks: dict = {}
@@ -519,14 +518,198 @@ def _dedupe_artists(blk: list) -> list:
     Doing this globally swapped tracks ACROSS block boundaries and fragmented
     the arc into neo soul -> rnb -> neo soul, undoing the grouping it exists to
     protect. Keep it inside the block.
+
+    Precedence: separating the artist beats strict chronology. Hearing the same
+    voice twice in a row is the thing a listener notices; a track landing a year
+    out of sequence is not. A forward swap is tried first because it disturbs
+    the chronology least -- but at the TAIL of a block there is nothing ahead to
+    swap with, so the track is moved BACKWARDS instead. Without that fallback a
+    block ending in two tracks by one artist kept them adjacent.
+
+    Some blocks cannot be fixed at all (three tracks, one artist). Best effort,
+    and it says so rather than pretending.
     """
+    def name(t):
+        return t["artists"][0]["name"]
+
     for i in range(1, len(blk)):
-        if blk[i]["artists"][0]["name"] == blk[i - 1]["artists"][0]["name"]:
-            for j in range(i + 1, len(blk)):
-                if blk[j]["artists"][0]["name"] != blk[i - 1]["artists"][0]["name"]:
-                    blk[i], blk[j] = blk[j], blk[i]
+        if name(blk[i]) != name(blk[i - 1]):
+            continue
+        for j in range(i + 1, len(blk)):           # forward: cheapest fix
+            if name(blk[j]) != name(blk[i - 1]):
+                blk[i], blk[j] = blk[j], blk[i]
+                break
+        else:                                       # tail of the block
+            # Nothing ahead to swap with, so move the EARLIER of the pair back,
+            # to the LATEST position that separates them. Latest, not earliest:
+            # it displaces one track by the smallest distance that works
+            # instead of flinging it to the front of the block.
+            who = name(blk[i])
+            for p in range(i - 2, -1, -1):
+                if name(blk[p]) != who and (p == 0 or name(blk[p - 1]) != who):
+                    blk.insert(p, blk.pop(i - 1))
                     break
     return blk
+
+
+# ---------------------------------------------------------------- any playlist
+# Everything above builds a playlist AND sequences it. The interesting half is
+# the sequencing, and it works on a playlist this tool didn't build: give it
+# something you already have and it re-orders it into blocks along an arc.
+#
+# The only metadata the public API still gives us since Nov 2024 is release
+# date and the artist's genre list. That is enough for a defensible arc and
+# nothing more -- no tempo, no key, no energy. Don't promise beatmatching.
+
+def _resolve_playlist(ref: str) -> dict:
+    """Accept a playlist id, an open.spotify.com URL, a spotify: URI, or a name."""
+    m = re.search(r"playlist[:/]([A-Za-z0-9]{22})", ref or "")
+    pid = m.group(1) if m else (ref if re.fullmatch(r"[A-Za-z0-9]{22}", ref or "") else None)
+    if pid:
+        return _call("GET", f"/playlists/{pid}")
+
+    # Name match against the user's own playlists. /me/playlists is the working
+    # path; /users/{id}/playlists is one of the Feb 2026 removals.
+    offset, hits = 0, []
+    while offset < 500:
+        d = _call("GET", "/me/playlists", params={"limit": 50, "offset": offset})
+        items = d.get("items") or []
+        if not items:
+            break
+        hits += [p for p in items if p and ref.lower() in (p.get("name") or "").lower()]
+        offset += 50
+    if not hits:
+        raise DJError(f"no playlist of yours matches {ref!r}")
+    if len(hits) > 1:
+        names = ", ".join(repr(p["name"]) for p in hits[:6])
+        raise DJError(f"{len(hits)} playlists match {ref!r}: {names} — be more specific")
+    return _call("GET", f"/playlists/{hits[0]['id']}")
+
+
+def _playlist_tracks(pid: str) -> list:
+    """Page through a playlist. NB /items, not /tracks (Feb 2026 rename)."""
+    out, offset = [], 0
+    while True:
+        d = _call("GET", f"/playlists/{pid}/items",
+                  params={"limit": 50, "offset": offset,
+                          "additional_types": "track"})
+        items = d.get("items") or []
+        if not items:
+            break
+        for it in items:
+            t = (it or {}).get("track") or {}
+            # Local files and podcast episodes have no uri we can re-add.
+            if t.get("type") == "track" and t.get("uri", "").startswith("spotify:track:"):
+                out.append(t)
+        offset += 50
+        if not d.get("next"):
+            break
+    return out
+
+
+def _artist_genre_map(tracks: list) -> dict:
+    """artist id -> first genre string. Batched 50 at a time (API max)."""
+    ids = []
+    for t in tracks:
+        a = (t.get("artists") or [{}])[0]
+        if a.get("id") and a["id"] not in ids:
+            ids.append(a["id"])
+    out = {}
+    for i in range(0, len(ids), 50):
+        chunk = ids[i:i + 50]
+        try:
+            d = _call("GET", "/artists", params={"ids": ",".join(chunk)})
+        except DJError:
+            continue          # a batch failing must not sink the sequence
+        for art in d.get("artists") or []:
+            if art:
+                gs = art.get("genres") or []
+                out[art["id"]] = gs[0] if gs else ""
+    return out
+
+
+def _decade(t: dict) -> str:
+    d = ((t.get("album") or {}).get("release_date") or "")[:4]
+    return f"{d[:3]}0s" if d.isdigit() else ""
+
+
+def tag_tracks(tracks: list, mode: str = "artist-genre", gmap: dict | None = None) -> list:
+    """Attach the `_genre` block tag _sequence() groups on.
+
+    The tag is just a string. Genre is the default because it is what the API
+    gives us, but decade works on exactly the same machinery -- which is the
+    point of keeping _sequence() tag-agnostic.
+    """
+    gmap = gmap or {}
+    for t in tracks:
+        if mode == "decade":
+            t["_genre"] = _decade(t) or "unknown"
+        else:
+            aid = ((t.get("artists") or [{}])[0]).get("id")
+            t["_genre"] = gmap.get(aid) or "unknown"
+    return tracks
+
+
+def auto_arc(tracks: list) -> list:
+    """Derive an arc when the caller didn't supply one.
+
+    Blocks are ordered by median release year, oldest first, so the set reads
+    as a run forward through time. It is a real, explainable rule rather than a
+    hidden taste model -- and `--order` overrides it whenever you disagree.
+    Ties break on block size (bigger blocks first) so the set opens with weight.
+    """
+    stats: dict = {}
+    for t in tracks:
+        y = ((t.get("album") or {}).get("release_date") or "")[:4]
+        stats.setdefault(t.get("_genre", ""), []).append(int(y) if y.isdigit() else 0)
+    def key(g):
+        yrs = sorted(v for v in stats[g] if v)
+        med = yrs[len(yrs) // 2] if yrs else 9999
+        return (med, -len(stats[g]))
+    return sorted(stats, key=key)
+
+
+def cmd_sequence(a):
+    pl = _resolve_playlist(a.playlist)
+    tracks = _playlist_tracks(pl["id"])
+    if not tracks:
+        raise DJError(f"{pl['name']!r} has no playable tracks")
+
+    gmap = _artist_genre_map(tracks) if a.tag_by == "artist-genre" else {}
+    tag_tracks(tracks, mode=a.tag_by, gmap=gmap)
+
+    order = [g.strip() for g in a.order.split(",") if g.strip()] if a.order else auto_arc(tracks)
+    picked = _sequence(tracks, order=order)
+
+    print(f"{pl['name']!r} — {len(tracks)} tracks, arc: " + " -> ".join(order))
+    if a.dry_run or a.verbose:
+        last = None
+        for i, t in enumerate(picked, 1):
+            if t["_genre"] != last:
+                last = t["_genre"]
+                print(f"\n  [{last}]")
+            print(f"   {i:>3}. {_fmt(t)}")
+    if a.dry_run:
+        print("\ndry run — nothing written")
+        return
+
+    uris = [t["uri"] for t in picked]
+    if a.into:
+        dest = _call("POST", "/me/playlists",
+                     json={"name": a.into, "public": False,
+                           "description": f"sequenced from {pl['name']}"})
+        target = dest["id"]
+    else:
+        target = pl["id"]
+        # PUT replaces the whole list in one shot, so the playlist is never
+        # left half-empty the way delete-then-add would leave it.
+        _call("PUT", f"/playlists/{target}/items", json={"uris": uris[:100]})
+        uris = uris[100:]
+    for i in range(0, len(uris), 100):
+        _call("POST", f"/playlists/{target}/items", json={"uris": uris[i:i + 100]})
+
+    where = a.into or pl["name"]
+    print(f"\nsequenced {len(picked)} tracks into {where!r}")
 
 
 def cmd_weekly_mix(a):
@@ -861,6 +1044,15 @@ def main() -> int:
     x.add_argument("--max-track-min", type=float, default=7.0,
                    help="skip tracks longer than this (worship medleys, DJ mixes)")
     x.set_defaults(fn=cmd_party_set)
+    x = s.add_parser("sequence", help="re-order any playlist you own into an arc")
+    x.add_argument("playlist", help="playlist name, id, or open.spotify.com URL")
+    x.add_argument("--order", help="comma-separated block order; default is derived by era")
+    x.add_argument("--tag-by", choices=["artist-genre", "decade"], default="artist-genre",
+                   dest="tag_by", help="what to group blocks on")
+    x.add_argument("--into", help="write to a NEW playlist instead of re-ordering in place")
+    x.add_argument("--dry-run", action="store_true", help="print the order, change nothing")
+    x.add_argument("--verbose", action="store_true")
+    x.set_defaults(fn=cmd_sequence)
     x = s.add_parser("make-playlist"); x.add_argument("name"); x.add_argument("--seed", required=True)
     x.add_argument("--limit", type=int, default=30); x.add_argument("--market", default="GB")
     x.set_defaults(fn=cmd_make_playlist)

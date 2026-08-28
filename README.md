@@ -20,6 +20,9 @@ spotify_dj.py party-set "Baptism" --hours 6 --exclude-artists "Artist A, Artist 
 
 # artists you don't already listen to, released recently
 spotify_dj.py new-artists --since 2025 --per-genre 5
+
+# re-sequence a playlist you already have (any playlist, not just ours)
+spotify_dj.py sequence "Sunday Long Drive" --dry-run
 ```
 
 ## Why this exists
@@ -149,6 +152,61 @@ Three rules, all derivable from metadata alone:
 This is weaker than real BPM/energy sequencing and isn't pretending otherwise. It's what
 works when that data is gone. If you run the Spotify desktop client,
 [sort-play](https://github.com/hoeci/sort-play) does it properly with real audio features.
+
+Where rules 2 and 3 collide — a block ending in two tracks by the same artist, with nothing
+ahead to swap with — **rule 3 wins** and one track moves backwards by the shortest distance
+that separates them. Hearing the same voice twice running is what a listener notices; a
+track landing a year out of sequence is not. Some blocks can't be fixed at all (three
+tracks, one artist); it does the best it can and doesn't pretend otherwise.
+
+## Sequencing a playlist you already have
+
+The sequencer doesn't care where the tracks came from, so it works on any playlist you own
+— including ones this tool didn't build:
+
+```bash
+# see what it would do, change nothing
+setlisted sequence "Sunday Long Drive" --dry-run
+
+# re-order it in place
+setlisted sequence "Sunday Long Drive"
+
+# or leave the original alone and write a sequenced copy
+setlisted sequence https://open.spotify.com/playlist/xxxx --into "Long Drive (sequenced)"
+
+# your arc, not the derived one
+setlisted sequence "Block Party" --order "soul, jazz rap, 90s hip hop, afrobeats"
+
+# group by era instead of genre — same machinery, different tag
+setlisted sequence "Block Party" --tag-by decade
+```
+
+Takes a playlist name, an id, a `spotify:playlist:` URI or an `open.spotify.com` URL.
+
+**Tags come from the artist**, since a track carries no genre of its own on the API —
+`/artists` still returns a genre list, and the first entry becomes the block tag. Artists
+with no genres land in one `unknown` block rather than being dropped.
+
+**Without `--order` the arc is derived from release dates**: blocks are sorted by median
+year, oldest first, so the set runs forward through time, ties breaking on block size so it
+opens with weight. That's a stated rule you can disagree with, not a hidden taste model —
+and `--order` overrides it.
+
+In-place re-ordering does a single `PUT /playlists/{id}/items`, so the playlist is never
+left half-empty the way delete-then-re-add would leave it if the run died midway.
+
+## Tests
+
+The sequencer is pure metadata, so it's testable with no network and no credentials — which
+matters, because the API has a daily quota that is genuinely possible to exhaust:
+
+```bash
+python3 tests/test_sequence.py
+```
+
+Fixtures plus 300 randomised playlists, asserting no track is lost or duplicated, blocks
+never fragment, and same-artist adjacencies only survive where they're mathematically
+unavoidable.
 
 ## The `--audience` split
 
