@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import re
 import os
 import sys
 import time
@@ -597,7 +598,13 @@ def _playlist_tracks(pid: str) -> list:
         if not items:
             break
         for it in items:
-            t = (it or {}).get("track") or {}
+            # Feb 2026 renamed the ROW field too: each item used to carry the
+            # object under "track"; it is now "item", and "track" survives as a
+            # BOOLEAN flag. Reading the old key gets you True, not a track --
+            # same rename family as /tracks -> /items on the path itself.
+            t = (it or {}).get("item") or (it or {}).get("track")
+            if not isinstance(t, dict):
+                continue
             # Local files and podcast episodes have no uri we can re-add.
             if t.get("type") == "track" and t.get("uri", "").startswith("spotify:track:"):
                 out.append(t)
@@ -608,23 +615,52 @@ def _playlist_tracks(pid: str) -> list:
 
 
 def _artist_genre_map(tracks: list) -> dict:
-    """artist id -> first genre string. Batched 50 at a time (API max)."""
+    """artist id -> first genre string.
+
+    MEASURED 28 Aug 2026, and it is bad news: for an app in Development Mode
+    the batch `GET /artists?ids=` is 403, and the single `GET /artists/{id}`
+    that still works returns an object with **no `genres` key at all** --
+    not an empty list, the field is gone. So there is no genre to tag with.
+
+    This is kept because the field may come back (or exist for extended-quota
+    apps), but it refuses loudly rather than tagging every track "unknown" and
+    handing back a playlist that looks sequenced and isn't. A silent degrade is
+    worse than an error: you don't find out until you're listening to it.
+    """
     ids = []
     for t in tracks:
         a = (t.get("artists") or [{}])[0]
         if a.get("id") and a["id"] not in ids:
             ids.append(a["id"])
-    out = {}
+    if not ids:
+        return {}
+
+    out, batched = {}, True
     for i in range(0, len(ids), 50):
-        chunk = ids[i:i + 50]
         try:
-            d = _call("GET", "/artists", params={"ids": ",".join(chunk)})
+            d = _call("GET", "/artists", params={"ids": ",".join(ids[i:i + 50])})
         except DJError:
-            continue          # a batch failing must not sink the sequence
+            batched = False
+            break
         for art in d.get("artists") or []:
-            if art:
+            if art and "genres" in art:
                 gs = art.get("genres") or []
                 out[art["id"]] = gs[0] if gs else ""
+
+    if not batched:
+        # One probe only. Eighty single lookups to discover the field is gone
+        # is exactly how you burn a daily quota for nothing.
+        probe = _call("GET", f"/artists/{ids[0]}")
+        if "genres" not in probe:
+            raise DJError(
+                "artist genres are not available to this app: batch /artists is "
+                "403 at Development Mode tier, and single /artists/{id} returns "
+                "no `genres` field. Sequence by something that still exists — "
+                "`--tag-by decade` — or pass your own arc with --order."
+            )
+        out[ids[0]] = (probe.get("genres") or [""])[0]
+    if not out:
+        raise DJError("no artist genres came back — use --tag-by decade")
     return out
 
 
@@ -1047,8 +1083,10 @@ def main() -> int:
     x = s.add_parser("sequence", help="re-order any playlist you own into an arc")
     x.add_argument("playlist", help="playlist name, id, or open.spotify.com URL")
     x.add_argument("--order", help="comma-separated block order; default is derived by era")
-    x.add_argument("--tag-by", choices=["artist-genre", "decade"], default="artist-genre",
-                   dest="tag_by", help="what to group blocks on")
+    x.add_argument("--tag-by", choices=["decade", "artist-genre"], default="decade",
+                   dest="tag_by",
+                   help="what to group blocks on (artist-genre needs a genres field "
+                        "the API no longer returns at Development Mode tier)")
     x.add_argument("--into", help="write to a NEW playlist instead of re-ordering in place")
     x.add_argument("--dry-run", action="store_true", help="print the order, change nothing")
     x.add_argument("--verbose", action="store_true")

@@ -177,15 +177,29 @@ setlisted sequence https://open.spotify.com/playlist/xxxx --into "Long Drive (se
 # your arc, not the derived one
 setlisted sequence "Block Party" --order "soul, jazz rap, 90s hip hop, afrobeats"
 
-# group by era instead of genre — same machinery, different tag
+# tag by era (the default) — blocks become 1960s, 1970s, 1980s...
 setlisted sequence "Block Party" --tag-by decade
 ```
 
 Takes a playlist name, an id, a `spotify:playlist:` URI or an `open.spotify.com` URL.
 
-**Tags come from the artist**, since a track carries no genre of its own on the API —
-`/artists` still returns a genre list, and the first entry becomes the block tag. Artists
-with no genres land in one `unknown` block rather than being dropped.
+### Why the default tag is the decade, not the genre
+
+A track carries no genre of its own on the API, so the obvious move is to read the genre
+off its artist. **That no longer works**, measured 28 Aug 2026 on a Development Mode app:
+
+- `GET /artists?ids=` (the batch form) returns **403**
+- `GET /artists/{id}` still works, but the object it returns has **no `genres` key at all**
+  — not an empty list, the field is simply gone
+
+So the only block tag still derivable from a track you already own is its **release
+decade**, and that is what `sequence` defaults to. `--tag-by artist-genre` is kept in case
+the field returns or your app has an extended quota, and it **fails with an error** rather
+than tagging everything `unknown` — a playlist that looks sequenced but isn't is worse than
+a refusal, because you don't find out until you're listening to it.
+
+If you want musical blocks rather than chronological ones, supply them: `--order` takes any
+tags you like, and the mix commands tag tracks with the genre they searched on.
 
 **Without `--order` the arc is derived from release dates**: blocks are sorted by median
 year, oldest first, so the set runs forward through time, ties breaking on block size so it
@@ -194,6 +208,20 @@ and `--order` overrides it.
 
 In-place re-ordering does a single `PUT /playlists/{id}/items`, so the playlist is never
 left half-empty the way delete-then-re-add would leave it if the run died midway.
+
+### One more Feb 2026 rename, undocumented in the obvious places
+
+The rename hit the **row field** inside a playlist, not just the path. Each item used to
+carry its track object under `"track"`; it is now `"item"`, and `"track"` survives as a
+**boolean flag**. Read the old key and you get `True`, not a track — and if you're lenient
+about types you'll conclude the playlist is empty. Both belong to the same family as
+`/playlists/*/tracks` → `/items`.
+
+```python
+t = item.get("item") or item.get("track")   # new key first, old as fallback
+if not isinstance(t, dict):
+    continue
+```
 
 ## Tests
 
