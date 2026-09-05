@@ -267,3 +267,13 @@ the genre list are both plain lists you can replace.
 ## Licence
 
 MIT.
+
+---
+
+## The API changes, written up
+
+The February 2026 renames and removals this tool works around are documented in full
+separately — including the response codes that mislead you and what each one actually means:
+
+**[The Spotify API, After the Break →](https://asareanderson.gumroad.com/l/taeoza)** ·
+[2-page cheat sheet](https://asareanderson.gumroad.com/l/yigsxw)
