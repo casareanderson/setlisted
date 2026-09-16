@@ -277,3 +277,8 @@ separately — including the response codes that mislead you and what each one a
 
 **[The Spotify API, After the Break →](https://asareanderson.gumroad.com/l/taeoza)** ·
 [2-page cheat sheet](https://asareanderson.gumroad.com/l/yigsxw)
+
+## Credits
+
+Tempo (BPM) and musical key data used for sequencing is provided by
+[GetSongBPM](https://getsongbpm.com/api) — Spotify removed its own audio-features endpoint in November 2024.
