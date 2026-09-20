@@ -1,4 +1,4 @@
-# spotify-dj
+# setlisted
 
 A small, dependency-light Spotify CLI that **plays music, builds discovery mixes, and
 sequences them like a set** — written against the post-February-2026 Web API, where a
