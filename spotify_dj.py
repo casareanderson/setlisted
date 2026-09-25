@@ -35,6 +35,12 @@ try:
 except Exception:
     hermes_secrets = None
 
+# Name stamped on every playlist this tool creates. Earlier versions used
+# "Hermes DJ"; it stays in MIX_PREFIXES so the no-repeat check still sees
+# playlists made before the rename.
+BRAND = "setlisted"
+MIX_PREFIXES = (BRAND, "Hermes DJ")
+
 SECRET_PATH = os.environ.get("SPOTIFY_SECRET_PATH", "/Spotify")
 TOKEN_CACHE = os.environ.get("SPOTIFY_TOKEN_CACHE",
                              os.path.join(os.path.expanduser("~"), ".spotify-dj-token.json"))
@@ -326,7 +332,7 @@ def cmd_make_playlist(a):
     # that works. Don't "fix" this back to the documented user-scoped path.
     pl = _call("POST", "/me/playlists",
                json={"name": a.name, "public": False,
-                     "description": f"Hermes DJ — seed: {a.seed}"})
+                     "description": f"{BRAND} — seed: {a.seed}"})
     # Feb 2026: /playlists/{id}/tracks was REMOVED and renamed to /items.
     # Spotify returns 403 (not 404) for removed endpoints, which reads exactly
     # like a permissions problem and is not. Same rename family as
@@ -426,8 +432,8 @@ def _taste_seeds(limit: int = 12) -> list:
     return seeds[:limit]
 
 
-def _previous_mix_uris(prefix: str = "Hermes DJ", cap: int = 25) -> set:
-    """Tracks already served in earlier Hermes DJ mixes.
+def _previous_mix_uris(prefixes: tuple = MIX_PREFIXES, cap: int = 25) -> set:
+    """Tracks already served in earlier setlisted mixes.
 
     Without this the weekly job is deterministic and regenerates the SAME
     playlist every Monday — the searches don't change and the library
@@ -439,7 +445,7 @@ def _previous_mix_uris(prefix: str = "Hermes DJ", cap: int = 25) -> set:
         pls = _call("GET", "/me/playlists", params={"limit": 50}).get("items", [])
     except DJError:
         return out
-    mine = [p for p in pls if (p.get("name") or "").startswith(prefix)][:cap]
+    mine = [p for p in pls if (p.get("name") or "").startswith(prefixes)][:cap]
     for p in mine:
         try:
             d = _call("GET", f"/playlists/{p['id']}/items", params={"limit": 100})
@@ -781,7 +787,7 @@ def cmd_weekly_mix(a):
         prev = _previous_mix_uris()
         known |= prev
         if prev:
-            print(f"excluding {len(prev)} tracks from earlier Hermes DJ mixes")
+            print(f"excluding {len(prev)} tracks from earlier setlisted mixes")
 
     picked, seen = [], set()
 
@@ -858,9 +864,9 @@ def cmd_weekly_mix(a):
 
     pl = _call("POST", "/me/playlists",
                json={"name": a.name, "public": False,
-                     "description": ("Hermes DJ weekly — kids mix, explicit filtered"
+                     "description": (f"{BRAND} weekly — kids mix, explicit filtered"
                                      if kids else
-                                     f"Hermes DJ weekly — {', '.join(genres)} — new to you")})
+                                     f"{BRAND} weekly — {', '.join(genres)} — new to you")})
     _call("POST", f"/playlists/{pl['id']}/items", json={"uris": [t["uri"] for t in picked]})
     print(f"created {a.name!r} with {len(picked)} tracks "
           + ("(kids, explicit filtered)" if kids else "(all new to your library)"))
@@ -934,7 +940,7 @@ def cmd_party_set(a):
 
     pl = _call("POST", "/me/playlists",
                json={"name": a.name, "public": False,
-                     "description": (f"Hermes DJ — {a.hours}h clean party set. "
+                     "description": (f"{BRAND} — {a.hours}h clean party set. "
                                      "No explicit tracks.")})
     for i in range(0, len(picked), 90):   # API takes 100 per call; stay under
         _call("POST", f"/playlists/{pl['id']}/items",
@@ -1033,7 +1039,7 @@ def cmd_auth_exchange(a):
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(prog="spotify-dj", description="Hermes DJ — Spotify control")
+    p = argparse.ArgumentParser(prog="spotify-dj", description=f"{BRAND} — Spotify control")
     s = p.add_subparsers(dest="cmd", required=True)
 
     s.add_parser("devices").set_defaults(fn=cmd_devices)
@@ -1053,7 +1059,7 @@ def main() -> int:
     x = s.add_parser("top"); x.add_argument("--limit", type=int, default=10)
     x.add_argument("--range", default="medium_term",
                    choices=["short_term", "medium_term", "long_term"]); x.set_defaults(fn=cmd_top)
-    x = s.add_parser("weekly-mix"); x.add_argument("name", nargs="?", default="Hermes DJ — Weekly Mix")
+    x = s.add_parser("weekly-mix"); x.add_argument("name", nargs="?", default=f"{BRAND} — Weekly Mix")
     x.add_argument("--genres", default=KIDS_DEFAULT_SENTINEL)
     x.add_argument("--audience", choices=["me", "kids"], default="me")
     x.add_argument("--limit", type=int, default=30)
@@ -1062,9 +1068,9 @@ def main() -> int:
     x.add_argument("--no-flow", action="store_true",
                    help="skip DJ sequencing; leave in discovery order")
     x.add_argument("--allow-repeats", action="store_true",
-                   help="don't exclude tracks from earlier Hermes DJ mixes")
+                   help="don't exclude tracks from earlier setlisted mixes")
     x.set_defaults(fn=cmd_weekly_mix)
-    x = s.add_parser("new-artists"); x.add_argument("name", nargs="?", default="Hermes DJ — New Artists")
+    x = s.add_parser("new-artists"); x.add_argument("name", nargs="?", default=f"{BRAND} — New Artists")
     x.add_argument("--genres", default=KIDS_DEFAULT_SENTINEL)
     x.add_argument("--since", type=int, default=2025)
     x.add_argument("--per-genre", type=int, default=5)
