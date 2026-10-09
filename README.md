@@ -267,3 +267,5 @@ MIT. See [LICENSE](LICENSE).
 - Tempo (BPM) and key data credit: [GetSongBPM](https://getsongbpm.com/api). The code in this repo does
   not call the GetSongBPM API yet; the sequencer works from Spotify metadata only.
 - [requests](https://requests.readthedocs.io/) (Apache-2.0).
+
+If this is useful to you, [buy me a coffee](https://buymeacoffee.com/iamc_tech) ☕
