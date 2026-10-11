@@ -47,6 +47,8 @@ post-February-2026 Web API.
 
 ## Quick start
 
+Full step-by-step guide, tested on a fresh machine every week: [docs/SETUP.md](docs/SETUP.md).
+
 You need Python 3, a Spotify account, and **Spotify Premium** for playback control (search and playlist
 building don't need it).
 

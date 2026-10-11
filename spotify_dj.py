@@ -1102,9 +1102,12 @@ def main() -> int:
     x.set_defaults(fn=cmd_make_playlist)
 
     a = p.parse_args()
+    # The secrets backend is optional. Without it, hermes_secrets is None and naming
+    # hermes_secrets.SecretError here turned every friendly error into a traceback.
+    errors = (DJError,) + ((hermes_secrets.SecretError,) if hermes_secrets is not None else ())
     try:
         a.fn(a)
-    except (DJError, hermes_secrets.SecretError) as exc:
+    except errors as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     return 0

@@ -1,0 +1,37 @@
+name: setup-check
+
+# Proves docs/SETUP.md still works from a fresh clone. Runs weekly so a change
+# upstream (Python, pip, requests) shows up here before it shows up for a reader.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+  push:
+    paths:
+      - "docs/SETUP.md"
+      - "scripts/setup-check.sh"
+      - "requirements.txt"
+      - "spotify_dj.py"
+      - ".github/workflows/setup-check.yml"
+  pull_request:
+    paths:
+      - "docs/SETUP.md"
+      - "scripts/setup-check.sh"
+      - "requirements.txt"
+      - "spotify_dj.py"
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: bash scripts/setup-check.sh
