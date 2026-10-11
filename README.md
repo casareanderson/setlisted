@@ -11,6 +11,7 @@ post-February-2026 Web API.
 
 ![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue)
 ![Python 3](https://img.shields.io/badge/python-3-3776ab)
+[![Buy Me a Coffee](https://raw.githubusercontent.com/casareanderson/.github/main/badges/bmc-yellow.svg)](https://buymeacoffee.com/iamc_tech)
 
 ## Contents
 
